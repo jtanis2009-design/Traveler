@@ -216,19 +216,7 @@ body.map-mode .head-wrap { width: 100%; padding-bottom: 12px; }
 .map-status { position: absolute; z-index: 500; left: max(10px, env(safe-area-inset-left, 0px)); bottom: calc(22px + env(safe-area-inset-bottom, 0px)); max-width: calc(100% - 80px); background: var(--surface); color: var(--ink); border-radius: 10px; padding: 6px 10px; font-size: 13px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
 .mapview:has(.track-panel:not([hidden])) .map-status { display: none; }
 
-/* Vehicle markers */
-.veh-icon { background: none; border: 0; }
-.veh { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }
-.veh-name {
-  position: relative; z-index: 1; min-width: 100%; height: 100%; padding: 0 3px; border-radius: 999px; display: grid; place-items: center;
-  background: var(--c); color: var(--t); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4);
-  font: 700 12px/1 var(--font-display); letter-spacing: -.01em; white-space: nowrap;
-}
-.veh.big .veh-name { font-size: 16px; border-width: 3px; }
-.veh.sched .veh-name { border-style: dashed; border-color: var(--t); opacity: .85; }
-.veh-dir { position: absolute; inset: -7px; z-index: 0; }
-.veh-dir i { position: absolute; left: 50%; top: 0; transform: translateX(-50%); width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 8px solid var(--c); filter: drop-shadow(0 0 1px #fff); }
-.veh.big .veh-dir { inset: -9px; }
+/* Vehicles are drawn on one canvas inside the map (map.js) */
 
 /* Tracking panel */
 .track-panel {

@@ -20,7 +20,9 @@ Before 13:00 it shows the trip to school, after 13:00 the trip home. The swap bu
 - **Live map** of every bus, tram, metro and train around you (like LiveOV): line colours, direction arrows, filters for Bus / Metro / Tram / Train / *My lines*, and a button to show where you are
 - **Track live**: tap any vehicle on the map, or the *Track live* button on a bus or metro in your journey, to follow it. It shows its route, every stop with live times, its delay, and when it reaches your stop
 
-Vehicles with a solid outline are positioned from live data. A dashed outline means that operator isn't sending live data right now, so the position comes from the timetable.
+Vehicles with a solid outline are positioned from live data. A dashed outline means that operator isn't sending live data right now, so the position comes from the timetable. Zoomed out, vehicles become small dots (lighter = timetable only).
+
+The map draws all vehicles on a single canvas and unpacks the live data in a background thread, so it stays smooth on phones even with hundreds of vehicles on screen.
 
 ## Data
 

@@ -71,19 +71,133 @@
   let vehicles = new Map();           // tripId -> vehicle
   let filter = "all";
   let myLines = new Set();
-  let fetchCtl = null, refreshTimer = null, tickTimer = null, moveTimer = null, lastFetch = null, lastCount = 0, fetchError = null;
+  let lastArea = null, lastZoom = 0;
+  let refreshTimer = null, tickTimer = null, moveTimer = null, lastFetch = null, lastCount = 0, fetchError = null;
   let tracked = null;
   let meMarker = null;
 
-  function iconHtml(v, big) {
-    const bg = "#" + (v.color || DEFAULT_COLORS[v.cat]);
-    const fg = v.textColor ? "#" + v.textColor : textOn(v.color || DEFAULT_COLORS[v.cat]);
-    return `<div class="veh${v.realTime ? "" : " sched"}${big ? " big" : ""}" style="--c:${esc(bg)};--t:${esc(fg)}">
-      <span class="veh-dir"><i></i></span><span class="veh-name">${esc(v.name || "")}</span></div>`;
+  // ---------- canvas: every vehicle is drawn in one <canvas> ----------
+  // Hundreds of separate HTML markers made the map stutter on phones. The canvas lives
+  // inside Leaflet's map layer (like Leaflet's own canvas renderer), so while you drag
+  // or pinch the browser just moves/scales the picture and nothing has to be redrawn.
+  // Each line badge is drawn once into a small sprite and then copied, which is cheap.
+  let layer, ctx, origin = null, hits = [], frameQueued = false, dpr = 1;
+  const FONT = '"Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif';
+  const sprites = new Map();
+  function colorsOf(v) {
+    const c = v.color || DEFAULT_COLORS[v.cat] || DEFAULT_COLORS.other;
+    v.bg = "#" + c;
+    v.fg = v.textColor ? "#" + v.textColor : textOn(c);
   }
-  function makeIcon(v, big) {
-    const s = big ? 40 : 30;
-    return L.divIcon({ className: "veh-icon", html: iconHtml(v, big), iconSize: [s, s], iconAnchor: [s / 2, s / 2] });
+  const SHORT = { intercity: "IC", "intercity direct": "ICD", sprinter: "SPR", sneltrein: "SNT", stoptrein: "ST", eurostar: "EST", ice: "ICE" };
+  function label(name) {
+    if (!name) return "";
+    if (name.length <= 5) return name;
+    return SHORT[name.toLowerCase()] || name.slice(0, 4);
+  }
+  function sprite(v, r) {
+    const dot = r <= 6, text = dot ? "" : label(v.name);
+    const key = `${text}|${v.bg}|${v.fg}|${v.realTime ? 1 : 0}|${r}`;
+    let sp = sprites.get(key);
+    if (sp) return sp;
+    const fs = r >= 18 ? 17 : r >= 13 ? 12 : 10;
+    const c = document.createElement("canvas"), x = c.getContext("2d");
+    x.font = `700 ${fs}px ${FONT}`;
+    const w = dot ? 2 * r : Math.max(2 * r, x.measureText(text).width + 10), h = 2 * r, m = 4;
+    c.width = Math.ceil((w + 2 * m) * dpr); c.height = Math.ceil((h + 2 * m) * dpr);
+    x.scale(dpr, dpr);
+    const cx = w / 2 + m, cy = h / 2 + m;
+    x.beginPath();
+    x.moveTo(cx - w / 2 + r, cy - r);
+    x.arcTo(cx + w / 2, cy - r, cx + w / 2, cy + r, r);
+    x.arcTo(cx + w / 2, cy + r, cx - w / 2, cy + r, r);
+    x.arcTo(cx - w / 2, cy + r, cx - w / 2, cy - r, r);
+    x.arcTo(cx - w / 2, cy - r, cx + w / 2, cy - r, r);
+    x.closePath();
+    if (dot && !v.realTime) x.globalAlpha = 0.55;   // timetable-only: lighter dot instead of a dashed edge
+    x.fillStyle = v.bg; x.fill();
+    x.lineWidth = dot ? 3 : 4; x.strokeStyle = "rgba(0,0,0,.28)"; x.stroke();
+    x.lineWidth = r >= 18 ? 3 : dot ? 1.5 : 2;
+    if (!v.realTime && !dot) x.setLineDash([3, 2.5]);
+    x.strokeStyle = "#fff"; x.stroke();
+    x.fillStyle = v.fg; x.font = `700 ${fs}px ${FONT}`; x.textAlign = "center"; x.textBaseline = "middle";
+    if (text) x.fillText(text, cx, cy + 1);
+    sp = { img: c, w, cw: w + 2 * m, ch: h + 2 * m };
+    if (sprites.size > 3000) sprites.clear();
+    sprites.set(key, sp);
+    return sp;
+  }
+  function drawVehicle(x, y, deg, v, r) {
+    const sp = sprite(v, r);
+    if (deg != null && r > 6) {
+      const rad = deg * Math.PI / 180, sin = Math.sin(rad), cos = -Math.cos(rad);
+      // Put the arrow just outside the badge, in the driving direction.
+      const tip = Math.min(sp.w / 2 / Math.max(Math.abs(sin), 1e-3), r / Math.max(Math.abs(cos), 1e-3)) + 8;
+      ctx.setTransform(dpr * Math.cos(rad), dpr * Math.sin(rad), -dpr * Math.sin(rad), dpr * Math.cos(rad), dpr * x, dpr * y);
+      ctx.beginPath(); ctx.moveTo(0, -tip); ctx.lineTo(6, -tip + 9); ctx.lineTo(-6, -tip + 9); ctx.closePath();
+      ctx.fillStyle = v.bg; ctx.fill(); ctx.stroke();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    ctx.drawImage(sp.img, x - sp.cw / 2, y - sp.ch / 2, sp.cw, sp.ch);
+    return sp.w;
+  }
+  const VehicleLayer = L.Renderer.extend({
+    options: { padding: 0.4, pane: "vehicles" },
+    _initContainer() { this._container = document.createElement("canvas"); ctx = this._container.getContext("2d"); },
+    _destroyContainer() { L.DomUtil.remove(this._container); },
+    _update() {
+      if (this._map._animatingZoom && this._bounds) return;
+      L.Renderer.prototype._update.call(this);
+      const b = this._bounds, size = b.getSize(), c = this._container;
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      L.DomUtil.setPosition(c, b.min);
+      c.width = Math.round(size.x * dpr); c.height = Math.round(size.y * dpr);
+      c.style.width = size.x + "px"; c.style.height = size.y + "px";
+      origin = b.min;
+      draw();
+    },
+  });
+  function setupCanvas() {
+    map.createPane("vehicles").style.zIndex = 450;   // above the route line, below the controls
+    layer = new VehicleLayer().addTo(map);
+    map.on("click", e => { const h = hitAt(e.layerPoint); if (h) track(h.id); });
+    map.on("mousemove", e => { map.getContainer().style.cursor = hitAt(e.layerPoint) ? "pointer" : ""; });
+  }
+  function hitAt(lp) {
+    if (!origin) return null;
+    const x = lp.x - origin.x, y = lp.y - origin.y;
+    let best = null, bd = Infinity;
+    for (const h of hits) {
+      const d = Math.hypot(h.x - x, h.y - y);
+      if (d <= h.r + 10 && d < bd) { bd = d; best = h; }
+    }
+    return best;
+  }
+  function queueDraw() { if (!frameQueued) { frameQueued = true; requestAnimationFrame(() => { frameQueued = false; draw(); }); } }
+  function draw() {
+    if (!ready || !visible || !ctx || !origin || map._animatingZoom) return;
+    const t = Date.now(), cw = ctx.canvas.width / dpr, ch = ctx.canvas.height / dpr, z = map.getZoom();
+    const r = z >= 14 ? 13 : z >= 12 ? 11 : 5;   // zoomed out: small dots without labels
+    const view = map.getBounds(), vb = view.pad(0.4);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.lineWidth = 1.5; ctx.strokeStyle = "#fff";
+    hits = [];
+    let shown = 0;
+    for (const v of vehicles.values()) {
+      if ((tracked && v.id === tracked.id) || !passesFilter(v)) continue;
+      const pos = positionOf(v, t);
+      if (!pos || !vb.contains(pos.ll)) continue;
+      const lp = map.latLngToLayerPoint(pos.ll), x = lp.x - origin.x, y = lp.y - origin.y;
+      if (view.contains(pos.ll)) shown++;
+      const w = drawVehicle(x, y, pos.deg, v, r);
+      hits.push({ x, y, r: Math.max(r, w / 2), id: v.id });
+    }
+    if (tracked?.lastPos && tracked.bg) {
+      const lp = map.latLngToLayerPoint(tracked.lastPos);
+      drawVehicle(lp.x - origin.x, lp.y - origin.y, tracked.lastDeg, tracked, 18);
+    }
+    lastCount = shown;
   }
 
   // ---------- init ----------
@@ -94,7 +208,13 @@
     L.control.zoom({ position: "bottomright" }).addTo(map);
     setTiles();
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", setTiles);
-    map.on("moveend", () => { clearTimeout(moveTimer); moveTimer = setTimeout(fetchVehicles, 350); requestAnimationFrame(render); });
+    setupCanvas();
+    map.on("moveend", () => {
+      queueDraw();
+      // Only download again when the view leaves the area we already have.
+      if (lastArea && lastArea.contains(map.getBounds()) && Math.abs(map.getZoom() - lastZoom) < 1) return;
+      clearTimeout(moveTimer); moveTimer = setTimeout(fetchVehicles, 350);
+    });
     map.on("dragstart", () => { if (tracked) { tracked.follow = false; renderPanel(); } });
 
     document.querySelectorAll("#mapFilters [data-filter]").forEach(b => b.addEventListener("click", () => {
@@ -126,7 +246,84 @@
   }
 
   // ---------- all vehicles in view ----------
-  async function fetchVehicles() {
+  // Downloading and unpacking the vehicle data (~0.5 MB) happens in a background
+  // thread so the map never freezes when new data comes in.
+  function vehicleWorker(self) {
+    let cache = new Map();
+    function decodeFlat(str) {
+      const out = [];
+      let i = 0, lat = 0, lon = 0;
+      while (i < str.length) {
+        for (let k = 0; k < 2; k++) {
+          let r = 0, sh = 0, b;
+          do { b = str.charCodeAt(i++) - 63; r |= (b & 31) << sh; sh += 5; } while (b >= 32);
+          const v = r & 1 ? ~(r >> 1) : r >> 1;
+          if (k === 0) lat += v; else lon += v;
+        }
+        out.push(lat / 1e5, lon / 1e5);
+      }
+      return new Float64Array(out);
+    }
+    function geometry(s) {
+      let pts = s.polyline ? decodeFlat(s.polyline) : new Float64Array(0);
+      if (pts.length < 4) pts = new Float64Array([s.from.lat, s.from.lon, s.to.lat, s.to.lon]);
+      const n = pts.length / 2, cum = new Float64Array(n), toR = Math.PI / 180;
+      for (let j = 1; j < n; j++) {
+        const la1 = pts[2 * j - 2] * toR, la2 = pts[2 * j] * toR, dLa = la2 - la1, dLo = (pts[2 * j + 1] - pts[2 * j - 1]) * toR;
+        const x = Math.sin(dLa / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLo / 2) ** 2;
+        cum[j] = cum[j - 1] + 12742000 * Math.asin(Math.sqrt(x));
+      }
+      return { pts, cum };
+    }
+    self.onmessage = async e => {
+      const { id, url } = e.data;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("The live map answered " + res.status + ".");
+        const segs = await res.json();
+        const byTrip = new Map(), next = new Map();
+        for (const s of segs) {
+          if (s.mode === "AIRPLANE") continue;
+          const key = ((s.trips && s.trips[0] && s.trips[0].tripId) || "") + "|" + s.from.stopId + "|" + s.to.stopId;
+          const geo = cache.get(key) || geometry(s);
+          next.set(key, geo);
+          const seg = { dep: Date.parse(s.departure), arr: Date.parse(s.arrival), pts: geo.pts, cum: geo.cum };
+          for (const tr of s.trips || []) {
+            let v = byTrip.get(tr.tripId);
+            if (!v) {
+              v = { id: tr.tripId, name: tr.displayName || tr.routeShortName || "", mode: s.mode, color: s.routeColor || "", realTime: false, segs: [] };
+              byTrip.set(tr.tripId, v);
+            }
+            v.realTime = v.realTime || !!s.realTime;
+            v.segs.push(seg);
+          }
+        }
+        for (const v of byTrip.values()) {
+          v.segs.sort((a, b) => a.dep - b.dep);
+          v.segs = v.segs.filter((g, i, a) => i === 0 || g.dep !== a[i - 1].dep || g.arr !== a[i - 1].arr);
+        }
+        cache = next;
+        self.postMessage({ id, list: [...byTrip.values()] });
+      } catch (err) {
+        self.postMessage({ id, error: String((err && err.message) || err) });
+      }
+    };
+  }
+  let worker = null, reqId = 0, pendingArea = null;
+  function getWorker() {
+    if (worker) return worker;
+    try {
+      worker = new Worker(URL.createObjectURL(new Blob([`(${vehicleWorker})(self)`], { type: "text/javascript" })));
+    } catch {
+      // No background threads available: run the same code on the main thread.
+      const fake = { postMessage: d => setTimeout(() => worker.onmessage({ data: d }), 0) };
+      vehicleWorker(fake);
+      worker = { postMessage: d => fake.onmessage({ data: d }) };
+    }
+    worker.onmessage = onVehicles;
+    return worker;
+  }
+  function fetchVehicles() {
     if (!ready || !visible || document.visibilityState !== "visible") return;
     const z = Math.round(map.getZoom());
     const b = map.getBounds().pad(0.15);
@@ -135,53 +332,44 @@
       min: `${b.getSouth().toFixed(5)},${b.getWest().toFixed(5)}`,
       max: `${b.getNorth().toFixed(5)},${b.getEast().toFixed(5)}`,
       zoom: String(z),
-      startTime: new Date(now - 60_000).toISOString(),
-      endTime: new Date(now + REFRESH_MS + 120_000).toISOString(),
+      startTime: new Date(now - 30_000).toISOString(),
+      endTime: new Date(now + REFRESH_MS + 60_000).toISOString(),
     });
-    fetchCtl?.abort();
-    const ctl = fetchCtl = new AbortController();
-    try {
-      const res = await fetch(`${API}/map/trips?${p}`, { signal: ctl.signal });
-      if (!res.ok) throw new Error(`The live map answered ${res.status}.`);
-      const segs = await res.json();
-      const next = new Map();
-      for (const s of segs) {
-        if (s.mode === "AIRPLANE") continue;
-        const pts = s.polyline ? decode(s.polyline, 5) : [];
-        const path = makePath(pts.length >= 2 ? pts : [[s.from.lat, s.from.lon], [s.to.lat, s.to.lon]]);
-        const seg = { dep: Date.parse(s.departure), arr: Date.parse(s.arrival), path };
-        for (const tr of s.trips || []) {
-          let v = next.get(tr.tripId);
-          if (!v) {
-            const old = vehicles.get(tr.tripId);
-            v = { id: tr.tripId, name: tr.displayName || tr.routeShortName || "", mode: s.mode, cat: catOf(s.mode),
-                  color: s.routeColor || "", realTime: !!s.realTime, segs: [], marker: old?.marker || null, markerKey: old?.markerKey };
-            next.set(tr.tripId, v);
-          }
-          v.realTime = v.realTime || !!s.realTime;
-          v.segs.push(seg);
-        }
-      }
-      for (const v of next.values()) {
-        v.segs.sort((a, b) => a.dep - b.dep);
-        v.segs = v.segs.filter((s, i, a) => i === 0 || s.dep !== a[i - 1].dep || s.arr !== a[i - 1].arr);
-      }
-      for (const [id, v] of vehicles) if (!next.has(id) && v.marker) v.marker.remove();
-      vehicles = next;
-      lastFetch = new Date(); fetchError = null;
-    } catch (e) {
-      if (e.name === "AbortError") return;
-      fetchError = e.message || "Network error.";
+    pendingArea = { b, z };
+    getWorker().postMessage({ id: ++reqId, url: `${API}/map/trips?${p}` });
+  }
+  function onVehicles(e) {
+    const { id, list, error } = e.data;
+    if (id !== reqId) return;               // an older request; a newer one is on its way
+    if (error) { fetchError = error; render(); return; }
+    const next = new Map();
+    for (const v of list) {
+      v.cat = catOf(v.mode);
+      colorsOf(v);
+      next.set(v.id, v);
     }
+    vehicles = next;
+    lastArea = pendingArea.b; lastZoom = pendingArea.z;
+    lastFetch = new Date(); fetchError = null;
     render();
   }
 
+  function pointAtFlat(pts, cum, d) {
+    const n = cum.length, len = cum[n - 1];
+    if (n === 1) return { ll: [pts[0], pts[1]], deg: null };
+    d = Math.max(0, Math.min(d, len));
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= d) lo = m; else hi = m; }
+    const a = [pts[2 * lo], pts[2 * lo + 1]], b = [pts[2 * hi], pts[2 * hi + 1]], seg = cum[hi] - cum[lo], f = seg ? (d - cum[lo]) / seg : 0;
+    return { ll: [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f], deg: seg ? bearing(a, b) : null };
+  }
   function positionOf(v, t) {
     const s = v.segs;
     if (!s.length) return null;
     const at = (g, f) => {
-      const p = pointAt(g.path, f * g.path.len);
-      if (p.deg == null || f >= 1) p.deg = pointAt(g.path, Math.max(0, g.path.len - 1)).deg;
+      const len = g.cum[g.cum.length - 1];
+      const p = pointAtFlat(g.pts, g.cum, f * len);
+      if (p.deg == null || f >= 1) p.deg = pointAtFlat(g.pts, g.cum, Math.max(0, len - 1)).deg;
       return p;
     };
     if (t < s[0].dep) return s[0].dep - t <= 120_000 ? at(s[0], 0) : null;
@@ -200,32 +388,11 @@
 
   function render() {
     if (!ready || !visible) return;
-    const t = Date.now();
-    const bounds = map.getBounds().pad(0.1);
-    let shown = 0;
-    for (const v of vehicles.values()) {
-      const pos = tracked && v.id === tracked.id ? null : (passesFilter(v) ? positionOf(v, t) : null);
-      if (!pos || !bounds.contains(pos.ll)) { if (v.marker) { v.marker.remove(); v.marker = null; } continue; }
-      shown++;
-      const key = v.name + v.color + v.realTime;
-      if (!v.marker || v.markerKey !== key) {
-        v.marker?.remove();
-        v.marker = L.marker(pos.ll, { icon: makeIcon(v), keyboard: false, riseOnHover: true }).addTo(map);
-        v.marker.on("click", () => track(v.id));
-        v.markerKey = key;
-      } else v.marker.setLatLng(pos.ll);
-      setDir(v.marker, pos.deg);
-    }
-    lastCount = shown;
-    if (tracked) renderTracked(t);
+    if (tracked) renderTracked(Date.now());
+    queueDraw();
     renderStatus();
   }
-  function setDir(marker, deg) {
-    const el = marker.getElement()?.querySelector(".veh-dir");
-    if (!el) return;
-    el.style.display = deg == null ? "none" : "";
-    if (deg != null) el.style.transform = `rotate(${deg.toFixed(0)}deg)`;
-  }
+  let statusTxt = "";
   function renderStatus() {
     const z = map.getZoom();
     let txt;
@@ -236,7 +403,7 @@
       if (z < 10) txt += "<br>Zoomed out: trains only. Zoom in for buses, trams and metro.";
       else if (filter === "mine" && !myLines.size) txt += "<br>Open a trip first to see your lines here.";
     }
-    $("#mapStatus").innerHTML = txt;
+    if (txt !== statusTxt) { $("#mapStatus").innerHTML = txt; statusTxt = txt; }
   }
 
   // ---------- one tracked vehicle ----------
@@ -306,12 +473,8 @@
     tr.stopLayer = L.layerGroup(tr.stops.map(s => L.circleMarker([s.lat, s.lon], {
       radius: isBoard(s) ? 7 : 4.5, color, weight: isBoard(s) ? 4 : 2, fillColor: "#fff", fillOpacity: 1,
     }).bindTooltip(`${esc(s.name)} · ${hm(s.arr)}`, { direction: "top", offset: [0, -4] }))).addTo(map);
-    const key = tr.name + tr.color + tr.realTime;
-    if (!tr.marker || tr.markerKey !== key) {
-      tr.marker?.remove();
-      tr.marker = L.marker([tr.stops[0].lat, tr.stops[0].lon], { icon: makeIcon(tr, true), zIndexOffset: 1000, keyboard: false }).addTo(map);
-      tr.markerKey = key;
-    }
+    tr.tw = null;
+    colorsOf(tr);
   }
   function isBoard(s) {
     const b = tracked?.board;
@@ -331,11 +494,10 @@
   }
   function renderTracked(t) {
     const tr = tracked;
-    if (!tr?.stops || !tr.marker) return;
+    if (!tr?.stops) return;
     const p = trackedPos(t);
     const pt = pointAt(tr.path, p.along);
-    tr.marker.setLatLng(pt.ll);
-    setDir(tr.marker, p.state === "moving" || p.state === "stop" ? pt.deg : null);
+    tr.lastDeg = p.state === "moving" || p.state === "stop" ? pt.deg : null;
     tr.pos = p; tr.lastPos = pt.ll;
     if (tr.follow) {
       if (tr.firstPaint) {
@@ -355,7 +517,7 @@
   function untrack(silent) {
     if (!tracked) return;
     clearInterval(tracked.timer);
-    ["marker", "line", "casing", "stopLayer"].forEach(k => tracked[k]?.remove());
+    ["line", "casing", "stopLayer"].forEach(k => tracked[k]?.remove());
     tracked = null;
     if (!silent) { renderPanel(); render(); }
   }
@@ -466,10 +628,16 @@
       clearInterval(refreshTimer); clearInterval(tickTimer);
       refreshTimer = setInterval(fetchVehicles, REFRESH_MS);
       tickTimer = setInterval(render, 1000);
+      setTimeout(() => layer?._update(), 50);
     },
     hide() { visible = false; clearInterval(refreshTimer); clearInterval(tickTimer); },
     track(tripId, board) { track(tripId, board); },
     setMyLines(names) { myLines = new Set(names); },
+    vehiclesOnScreen() {
+      const sz = map.getSize();
+      return hits.map(h => { const c = map.layerPointToContainerPoint(L.point(h.x + origin.x, h.y + origin.y)); return { x: c.x, y: c.y, id: h.id, live: !!vehicles.get(h.id)?.realTime }; })
+        .filter(h => h.x >= 0 && h.y >= 0 && h.x <= sz.x && h.y <= sz.y);
+    },
     resume() { if (visible) { fetchVehicles(); if (tracked) loadTracked(); } },
   };
 })();

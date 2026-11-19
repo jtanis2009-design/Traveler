@@ -1,5 +1,5 @@
 // Caches the app itself so it opens instantly. Journey data is always fetched live.
-const CACHE = "traveler-v2";
+const CACHE = "traveler-v3";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "map.js"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", e => {
