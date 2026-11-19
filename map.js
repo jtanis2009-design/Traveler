@@ -204,7 +204,9 @@
   function init(center) {
     if (ready) return;
     ready = true;
-    map = L.map("map", { zoomControl: false, attributionControl: true, minZoom: 7, maxZoom: 18 }).setView(center || [51.92, 4.48], 14);
+    const NL = L.latLngBounds([50.6, 3.0], [53.75, 7.45]);   // the Netherlands, with a little margin
+    map = L.map("map", { zoomControl: false, attributionControl: true, minZoom: 8, maxZoom: 18, maxBounds: NL, maxBoundsViscosity: 0.9 })
+      .setView(center || [51.92, 4.48], 14);
     L.control.zoom({ position: "bottomright" }).addTo(map);
     setTiles();
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", setTiles);
@@ -281,14 +283,19 @@
         const res = await fetch(url);
         if (!res.ok) throw new Error("The live map answered " + res.status + ".");
         const segs = await res.json();
+        if (!Array.isArray(segs)) throw new Error(/too many/i.test(segs && segs.error) ? "TOO_MANY" : "The live map sent something unexpected.");
         const byTrip = new Map(), next = new Map();
         for (const s of segs) {
           if (s.mode === "AIRPLANE") continue;
+          // Only Dutch public transport: trip ids look like "20261119_12:38_nl-OpenOV_399095354",
+          // foreign ones like "..._be-delijn_...", "..._de-DELFI_...", "..._eu-flixbus_...".
+          const trips = (s.trips || []).filter(t => /(^|_)nl-/.test(t.tripId));
+          if (!trips.length) continue;
           const key = ((s.trips && s.trips[0] && s.trips[0].tripId) || "") + "|" + s.from.stopId + "|" + s.to.stopId;
           const geo = cache.get(key) || geometry(s);
           next.set(key, geo);
           const seg = { dep: Date.parse(s.departure), arr: Date.parse(s.arrival), pts: geo.pts, cum: geo.cum };
-          for (const tr of s.trips || []) {
+          for (const tr of trips) {
             let v = byTrip.get(tr.tripId);
             if (!v) {
               v = { id: tr.tripId, name: tr.displayName || tr.routeShortName || "", mode: s.mode, color: s.routeColor || "", realTime: false, segs: [] };
@@ -341,7 +348,7 @@
   function onVehicles(e) {
     const { id, list, error } = e.data;
     if (id !== reqId) return;               // an older request; a newer one is on its way
-    if (error) { fetchError = error; render(); return; }
+    if (error) { fetchError = error === "TOO_MANY" ? "Too many vehicles in this view. Zoom in a little." : error; render(); return; }
     const next = new Map();
     for (const v of list) {
       v.cat = catOf(v.mode);
@@ -396,11 +403,12 @@
   function renderStatus() {
     const z = map.getZoom();
     let txt;
-    if (fetchError && !vehicles.size) txt = `Couldn't load vehicles. ${esc(fetchError)}`;
+    if (fetchError && /zoom in/i.test(fetchError)) txt = esc(fetchError);
+    else if (fetchError && !vehicles.size) txt = `Couldn't load vehicles. ${esc(fetchError)}`;
     else if (!lastFetch) txt = "Loading vehicles…";
     else {
       txt = `<strong>${lastCount}</strong> ${lastCount === 1 ? "vehicle" : "vehicles"} · updated ${hm(lastFetch)}`;
-      if (z < 10) txt += "<br>Zoomed out: trains only. Zoom in for buses, trams and metro.";
+      if (z < 9) txt += "<br>Zoomed out: trains only. Zoom in for buses, trams and metro.";
       else if (filter === "mine" && !myLines.size) txt += "<br>Open a trip first to see your lines here.";
     }
     if (txt !== statusTxt) { $("#mapStatus").innerHTML = txt; statusTxt = txt; }
