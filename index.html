@@ -15,6 +15,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>
+<script src="map.js" defer></script>
 <style>
 /* Layout: one phone-width column. Saved trips on top, departures board below. */
 :root {
@@ -54,6 +57,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body {
   background: var(--bg);
@@ -188,11 +192,88 @@ dialog::backdrop { background: rgba(5, 12, 18, .55); }
 .sugg small { display: block; color: var(--muted); }
 .sheet-actions { display: flex; justify-content: flex-end; gap: 8px; }
 footer { font-size: 12px; color: var(--muted); text-align: center; }
+
+/* Tabs */
+.head-wrap { padding-bottom: 0; gap: 14px; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 3px; }
+.tabs button { border: 0; background: none; padding: 9px 12px; border-radius: 9px; font-weight: 700; color: var(--muted); }
+.tabs button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+#tripsView { padding-top: 0; }
+
+/* Map view */
+body.map-mode { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+body.map-mode .head-wrap { width: 100%; padding-bottom: 12px; }
+.mapview { position: relative; flex: 1; min-height: 0; border-top: 1px solid var(--line); }
+#map { position: absolute; inset: 0; background: var(--surface-2); }
+.leaflet-container { font: 14px/1.4 var(--font-body); }
+.leaflet-control-attribution { font-size: 10px; }
+.map-top { position: absolute; z-index: 500; top: 10px; left: max(10px, env(safe-area-inset-left, 0px)); right: max(10px, env(safe-area-inset-right, 0px)); display: flex; gap: 8px; align-items: flex-start; pointer-events: none; }
+.map-top > * { pointer-events: auto; }
+.map-filters { flex-wrap: wrap; box-shadow: 0 2px 10px rgba(0,0,0,.15); min-width: 0; }
+.map-filters button { padding: 6px 10px; font-size: 13px; }
+.locate { margin-left: auto; box-shadow: 0 2px 10px rgba(0,0,0,.15); background: var(--surface); }
+.locate.busy { color: var(--accent); }
+.map-status { position: absolute; z-index: 500; left: max(10px, env(safe-area-inset-left, 0px)); bottom: calc(22px + env(safe-area-inset-bottom, 0px)); max-width: calc(100% - 80px); background: var(--surface); color: var(--ink); border-radius: 10px; padding: 6px 10px; font-size: 13px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+.mapview:has(.track-panel:not([hidden])) .map-status { display: none; }
+
+/* Vehicle markers */
+.veh-icon { background: none; border: 0; }
+.veh { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }
+.veh-name {
+  position: relative; z-index: 1; min-width: 100%; height: 100%; padding: 0 3px; border-radius: 999px; display: grid; place-items: center;
+  background: var(--c); color: var(--t); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4);
+  font: 700 12px/1 var(--font-display); letter-spacing: -.01em; white-space: nowrap;
+}
+.veh.big .veh-name { font-size: 16px; border-width: 3px; }
+.veh.sched .veh-name { border-style: dashed; border-color: var(--t); opacity: .85; }
+.veh-dir { position: absolute; inset: -7px; z-index: 0; }
+.veh-dir i { position: absolute; left: 50%; top: 0; transform: translateX(-50%); width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 8px solid var(--c); filter: drop-shadow(0 0 1px #fff); }
+.veh.big .veh-dir { inset: -9px; }
+
+/* Tracking panel */
+.track-panel {
+  position: absolute; z-index: 600; left: max(10px, env(safe-area-inset-left, 0px)); right: max(10px, env(safe-area-inset-right, 0px));
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px)); max-height: 52%; display: flex; flex-direction: column; gap: 8px;
+  background: var(--surface); color: var(--ink); border-radius: 16px; padding: 12px 12px 6px; box-shadow: 0 6px 24px rgba(0,0,0,.25);
+  max-width: 520px; margin-inline: auto;
+}
+.tp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tp-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 700; font-size: 17px; }
+.tp-title .chip { font-size: 17px; padding: 4px 9px; }
+.tp-hs { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.flag.sched-flag { color: var(--muted); border: 1px dashed currentColor; }
+.tp-where { font-size: 15px; }
+.tp-board { font-size: 15px; background: var(--accent-soft); border-radius: 10px; padding: 7px 10px; }
+.tp-board.past { background: var(--surface-2); color: var(--muted); }
+.tp-actions { display: flex; gap: 8px; }
+.btn.sm { padding: 6px 12px; font-size: 14px; }
+.btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.tp-stops { list-style: none; margin: 0; padding: 0 0 6px; overflow: auto; min-height: 60px; position: relative; }
+.tp-stops li { display: grid; grid-template-columns: 50px 18px 1fr; align-items: center; gap: 6px; padding: 4px 0; font-size: 14px; position: relative; }
+.tp-stops li::before { content: ""; position: absolute; left: 63px; top: 0; bottom: 0; width: 4px; background: var(--c); opacity: .9; }
+.tp-stops li:first-child::before { top: 50%; }
+.tp-stops li:last-child::before { bottom: 50%; }
+.tp-stops li.passed { color: var(--muted); }
+.tp-stops li.passed::before { opacity: .3; }
+.tp-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--surface); border: 3px solid var(--c); position: relative; z-index: 1; justify-self: center; }
+.tp-stops li.next .tp-dot { width: 16px; height: 16px; background: var(--c); }
+.tp-stops li.next .tp-n { font-weight: 700; }
+.tp-stops li.mine .tp-n { font-weight: 700; color: var(--accent); }
+.tp-stops li.mine .tp-dot { box-shadow: 0 0 0 3px var(--accent-soft); }
+.tp-t { font-family: var(--font-display); font-weight: 700; font-size: 15px; }
+.tp-t.late { color: var(--late); }
+.tp-t s { display: block; font-size: 12px; font-weight: 500; color: var(--muted); line-height: 1; }
+.tp-n small { color: var(--muted); font-weight: 400; }
+.tp-n .cxl { color: var(--bad); font-weight: 700; }
+
+.track-btn { margin-left: auto; border: 1px solid var(--accent); color: var(--accent); background: var(--surface); border-radius: 999px; padding: 3px 10px; font-size: 13px; font-weight: 700; display: inline-flex; align-items: center; gap: 5px; }
+.track-btn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px var(--accent-soft); }
 footer a { color: inherit; }
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="wrap head-wrap">
   <header class="top">
     <div class="brand">
       <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--accent)"/><path d="M9 21.5V11a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v10.5M9 17h14M12 24.5l1.5-3M20 24.5l-1.5-3" stroke="var(--accent-ink)" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12.5" cy="19.6" r="1" fill="var(--accent-ink)"/><circle cx="19.5" cy="19.6" r="1" fill="var(--accent-ink)"/></svg>
@@ -200,6 +281,13 @@ footer a { color: inherit; }
     </div>
     <div class="clock" id="clock" aria-label="Current time">--:--</div>
   </header>
+  <nav class="tabs" aria-label="View">
+    <button type="button" data-view="trips" aria-pressed="true">My trips</button>
+    <button type="button" data-view="map" aria-pressed="false">Live map</button>
+  </nav>
+</div>
+
+<div class="wrap" id="tripsView">
 
   <section aria-labelledby="trips-label" style="display:grid;gap:10px">
     <div class="section-head">
@@ -232,6 +320,23 @@ footer a { color: inherit; }
 
   <footer>Times from <a href="https://transitous.org" target="_blank" rel="noopener">Transitous</a> (OpenOV data, live where operators share it).</footer>
 </div>
+
+<section class="mapview" id="mapView" hidden aria-label="Live map">
+  <div id="map"></div>
+  <div class="map-top">
+    <div class="seg map-filters" id="mapFilters" role="group" aria-label="Show">
+      <button type="button" data-filter="all" aria-pressed="true">All</button>
+      <button type="button" data-filter="mine" aria-pressed="false">My lines</button>
+      <button type="button" data-filter="bus" aria-pressed="false">Bus</button>
+      <button type="button" data-filter="metro" aria-pressed="false">Metro</button>
+      <button type="button" data-filter="tram" aria-pressed="false">Tram</button>
+      <button type="button" data-filter="train" aria-pressed="false">Train</button>
+    </div>
+    <button class="iconbtn locate" id="locateBtn" type="button" aria-label="Show my location"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+  </div>
+  <div class="map-status" id="mapStatus">Loading vehicles…</div>
+  <div class="track-panel" id="trackPanel" hidden></div>
+</section>
 
 <dialog id="addDlg" aria-labelledby="addTitle">
   <form class="sheet" id="addForm" method="dialog">
@@ -486,7 +591,7 @@ function renderDetail(it, alerts) {
     const stops = l.intermediateStops?.length;
     parts.push(`<div class="leg">
       ${timeCell(l.from.departure, l.from.scheduledDeparture)}<span class="stop">${esc(l.from.name)}${tr}</span>
-      <span class="ride">${legChip(l)} towards ${esc(l.headsign || l.to.name)}${stops ? ` · ${stops} stops` : ""}${l.agencyName ? ` · ${esc(l.agencyName)}` : ""}${l.cancelled ? ` · <strong style="color:var(--bad)">cancelled</strong>` : ""}</span>
+      <span class="ride">${legChip(l)} towards ${esc(l.headsign || l.to.name)}${stops ? ` · ${stops} stops` : ""}${l.agencyName ? ` · ${esc(l.agencyName)}` : ""}${l.cancelled ? ` · <strong style="color:var(--bad)">cancelled</strong>` : ""}${l.tripId ? `<button type="button" class="track-btn" data-track="${esc(l.tripId)}" data-board-id="${esc(l.from.stopId || "")}" data-board-name="${esc(l.from.name)}">Track live</button>` : ""}</span>
       ${timeCell(l.to.arrival, l.to.scheduledArrival)}<span class="stop">${esc(l.to.name)}${ttr}</span>
     </div>`);
   }
@@ -573,6 +678,8 @@ $("#trips").addEventListener("keydown", e => {
 });
 $("#list").addEventListener("click", e => {
   if (e.target.closest("#retry")) return load();
+  const tb = e.target.closest("[data-track]");
+  if (tb) { setView("map"); window.LiveMap?.track(tb.dataset.track, { id: tb.dataset.boardId, name: tb.dataset.boardName }); return; }
   const b = e.target.closest("[data-open]");
   if (!b) return;
   const k = b.dataset.open;
@@ -655,19 +762,51 @@ $("#addForm").addEventListener("submit", e => {
   dlg.close(); state.open.clear(); load();
 });
 
+// ---------- views ----------
+let view = "trips";
+function myLineNames() {
+  const names = new Set();
+  const its = state.itineraries.concat(Object.values(state.nextByTrip));
+  its.forEach(it => transitLegs(it).forEach(l => (l.routeShortName || l.displayName) && names.add(l.routeShortName || l.displayName)));
+  return [...names];
+}
+function setView(v, fromHash) {
+  view = v === "map" ? "map" : "trips";
+  document.querySelectorAll(".tabs [data-view]").forEach(b => b.setAttribute("aria-pressed", b.dataset.view === view));
+  $("#tripsView").hidden = view !== "trips";
+  $("#mapView").hidden = view !== "map";
+  document.body.classList.toggle("map-mode", view === "map");
+  if (!fromHash) { try { history.replaceState(null, "", view === "map" ? "#map" : location.pathname + location.search); } catch {} }
+  const start = () => {
+    if (!window.LiveMap || !window.L) return setTimeout(start, 100);
+    if (view === "map") {
+      window.LiveMap.setMyLines(myLineNames());
+      const trip = state.trips.find(x => x.id === state.selected);
+      const c = trip ? ends(trip)[0].place.split(",").map(Number) : null;
+      window.LiveMap.show(c);
+    } else window.LiveMap.hide();
+  };
+  start();
+}
+document.querySelectorAll(".tabs [data-view]").forEach(b => b.addEventListener("click", () => setView(b.dataset.view)));
+window.addEventListener("hashchange", () => setView(location.hash === "#map" ? "map" : "trips", true));
+
 // ---------- clock & refresh ----------
 function tick() {
   $("#clock").textContent = t(new Date().toISOString());
-  if (!state.loading) render();
+  if (!state.loading && view === "trips") render();
 }
 setInterval(tick, 15_000);
-setInterval(() => { if (state.mode === "now" && document.visibilityState === "visible") { load(); loadPreviews(); } }, REFRESH_MS);
+setInterval(() => { if (view === "trips" && state.mode === "now" && document.visibilityState === "visible") { load(); loadPreviews(); } }, REFRESH_MS);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && state.mode === "now" && (!state.updatedAt || Date.now() - state.updatedAt > 30_000)) { load(); loadPreviews(); }
+  if (document.visibilityState !== "visible") return;
+  if (view === "map") return window.LiveMap?.resume();
+  if (state.mode === "now" && (!state.updatedAt || Date.now() - state.updatedAt > 30_000)) { load(); loadPreviews(); }
 });
 
 $("#clock").textContent = t(new Date().toISOString());
 load(); loadPreviews();
+if (location.hash === "#map") setView("map", true);
 
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>

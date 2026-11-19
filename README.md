@@ -17,10 +17,14 @@ Before 13:00 it shows the trip to school, after 13:00 the trip home. The swap bu
 - "Depart at" and "Arrive by" (defaults to arriving by 08:30)
 - Add your own trips with place search; they're saved on your phone
 - Installable on your home screen, works like an app
+- **Live map** of every bus, tram, metro and train around you (like LiveOV): line colours, direction arrows, filters for Bus / Metro / Tram / Train / *My lines*, and a button to show where you are
+- **Track live**: tap any vehicle on the map, or the *Track live* button on a bus or metro in your journey, to follow it. It shows its route, every stop with live times, its delay, and when it reaches your stop
+
+Vehicles with a solid outline are positioned from live data. A dashed outline means that operator isn't sending live data right now, so the position comes from the timetable.
 
 ## Data
 
-Journey planning comes from the free, open [Transitous](https://transitous.org) API (Dutch OpenOV timetable and live data). No API key needed.
+Journey planning and vehicle positions come from the free, open [Transitous](https://transitous.org) API (Dutch OpenOV timetable and live data). No API key needed. Positions are worked out from live departure and arrival times at each stop, so a vehicle moves smoothly between stops. The map uses OpenStreetMap / CARTO tiles and [Leaflet](https://leafletjs.com).
 
 ## Putting it on your phone
 
