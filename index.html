@@ -797,7 +797,7 @@ $("#clock").textContent = t(new Date().toISOString());
 load(); loadPreviews();
 if (location.hash === "#map") setView("map", true);
 
-if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).catch(() => {});
 </script>
 </body>
 </html>

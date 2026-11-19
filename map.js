@@ -71,7 +71,7 @@
   let vehicles = new Map();           // tripId -> vehicle
   let filter = "all";
   let myLines = new Set();
-  let lastArea = null, lastZoom = 0;
+  let lastArea = null, lastZoom = 0, lastReqZoom = 14;
   let refreshTimer = null, tickTimer = null, moveTimer = null, lastFetch = null, lastCount = 0, fetchError = null;
   let tracked = null;
   let meMarker = null;
@@ -345,16 +345,20 @@
   function fetchVehicles() {
     if (!ready || !visible || document.visibilityState !== "visible") return;
     const z = Math.round(map.getZoom());
+    // A PC screen shows a much bigger area than a phone. Ask the server for the level of detail a
+    // phone would get for the same area, otherwise zooming out on a PC downloads many megabytes.
+    const sz = map.getSize(), extra = Math.max(0, Math.log2((sz.x * sz.y) / (420 * 700)) / 2);
+    const zq = Math.max(7, Math.round(map.getZoom()) - Math.ceil(extra - 0.25));   // 7 still includes all trains
     const b = map.getBounds().pad(0.15);
     const now = Date.now();
     const p = new URLSearchParams({
       min: `${b.getSouth().toFixed(5)},${b.getWest().toFixed(5)}`,
       max: `${b.getNorth().toFixed(5)},${b.getEast().toFixed(5)}`,
-      zoom: String(z),
+      zoom: String(zq),
       startTime: new Date(now - 30_000).toISOString(),
       endTime: new Date(now + REFRESH_MS + 60_000).toISOString(),
     });
-    pendingArea = { b, z };
+    pendingArea = { b, z, zq };
     getWorker().postMessage({ id: ++reqId, url: `${API}/map/trips?${p}` });
   }
   function onVehicles(e) {
@@ -368,7 +372,7 @@
       next.set(v.id, v);
     }
     vehicles = next;
-    lastArea = pendingArea.b; lastZoom = pendingArea.z;
+    lastArea = pendingArea.b; lastZoom = pendingArea.z; lastReqZoom = pendingArea.zq;
     lastFetch = new Date(); fetchError = null;
     render();
   }
@@ -413,14 +417,13 @@
   }
   let statusTxt = "";
   function renderStatus() {
-    const z = map.getZoom();
     let txt;
     if (fetchError && /zoom in/i.test(fetchError)) txt = esc(fetchError);
     else if (fetchError && !vehicles.size) txt = `Couldn't load vehicles. ${esc(fetchError)}`;
     else if (!lastFetch) txt = "Loading vehicles…";
     else {
       txt = `<strong>${lastCount}</strong> ${lastCount === 1 ? "vehicle" : "vehicles"} · updated ${hm(lastFetch)}`;
-      if (z < 9) txt += "<br>Zoomed out: trains only. Zoom in for buses, trams and metro.";
+      if (lastReqZoom < 9) txt += "<br>Zoomed out: trains only. Zoom in for buses, trams and metro.";
       else if (filter === "mine" && !myLines.size) txt += "<br>Open a trip first to see your lines here.";
     }
     if (txt !== statusTxt) { $("#mapStatus").innerHTML = txt; statusTxt = txt; }
