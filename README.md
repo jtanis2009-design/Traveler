@@ -26,7 +26,7 @@ The map draws all vehicles on a single canvas and unpacks the live data in a bac
 
 ## Data
 
-Journey planning and vehicle positions come from the free, open [Transitous](https://transitous.org) API (Dutch OpenOV timetable and live data). No API key needed. Positions are worked out from live departure and arrival times at each stop, so a vehicle moves smoothly between stops. The map uses OpenStreetMap / CARTO tiles and [Leaflet](https://leafletjs.com).
+Journey planning and vehicle positions come from the free, open [Transitous](https://transitous.org) API (Dutch OpenOV timetable and live data). No API key needed. Positions are worked out from live departure and arrival times at each stop, so a vehicle moves smoothly between stops. The background map is the free official Dutch map [PDOK BRT-Achtergrondkaart](https://www.pdok.nl/) (Kadaster), no API key needed, drawn with [Leaflet](https://leafletjs.com).
 
 ## Putting it on your phone
 

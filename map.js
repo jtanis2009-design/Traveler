@@ -239,13 +239,25 @@
     const t = document.documentElement.dataset.theme;
     return t ? t === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
   }
+  // Background map: PDOK BRT-Achtergrondkaart, the free official Dutch map (Kadaster). No API key needed.
+  // In dark mode the grey version is inverted with CSS. If PDOK is down, it falls back to OpenStreetMap.
+  let tileErrors = 0, useOsm = false;
   function setTiles() {
     if (tiles) tiles.remove();
-    tiles = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${isDark() ? "dark_all" : "rastertiles/voyager"}/{z}/{x}/{y}{r}.png`, {
-      subdomains: "abcd", maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    const dark = isDark();
+    const url = useOsm
+      ? "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+      : `https://service.pdok.nl/brt/achtergrondkaart/wmts/v2_0/${dark ? "grijs" : "pastel"}/EPSG:3857/{z}/{x}/{y}.png`;
+    tiles = L.tileLayer(url, {
+      maxZoom: 19, className: dark ? "tiles-dark" : "",
+      attribution: useOsm
+        ? '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        : 'Kaart: <a href="https://www.pdok.nl/">PDOK</a> &copy; Kadaster',
     }).addTo(map);
+    tiles.on("tileload", () => { tileErrors = 0; });
+    tiles.on("tileerror", () => { if (!useOsm && ++tileErrors >= 8) { useOsm = true; setTiles(); } });
   }
+
 
   // ---------- all vehicles in view ----------
   // Downloading and unpacking the vehicle data (~0.5 MB) happens in a background
